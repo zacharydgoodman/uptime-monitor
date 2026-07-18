@@ -1,0 +1,40 @@
+name: uptime
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Override target URL (test the alert path with a known-bad URL)'
+        required: false
+        default: ''
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check /ready
+        env:
+          NTFY_URL: ${{ secrets.NTFY_URL }}
+          TARGET: ${{ inputs.target != '' && inputs.target || 'https://glissandolabs.com/ready' }}
+        run: |
+          set -u
+          fail=""
+          raw=$(curl -sS --max-time 15 -w '\n%{http_code}' "$TARGET" 2>&1) || fail="fetch failed"
+          if [ -z "$fail" ]; then
+            code=$(printf '%s' "$raw" | tail -1)
+            content=$(printf '%s' "$raw" | sed '$d')
+            if [ "$code" != "200" ]; then
+              fail="HTTP $code"
+            elif ! printf '%s' "$content" | grep -q '"status":"ready"'; then
+              fail="unexpected /ready body"
+            fi
+          fi
+          if [ -n "$fail" ]; then
+            echo "UPTIME CHECK FAILED: $TARGET — $fail"
+            curl -sS --max-time 15 -X POST "$NTFY_URL" \
+              -d "UPTIME CHECK FAILED: $TARGET — $fail" || echo "ntfy delivery also failed"
+            exit 1
+          fi
+          echo "OK: $TARGET"
